@@ -8,7 +8,7 @@ import { isIP } from "node:net";
 import * as cheerio from "cheerio";
 import { createClient } from "@/lib/supabase/server";
 
-export const runtime = "nodejs"; // модуль dns работает только в Node.js
+
 
 const MAX_BYTES = 1_000_000; // не скачиваем больше 1 МБ
 const MAX_CHARS = 100_000; // не сохраняем больше 100 000 символов текста

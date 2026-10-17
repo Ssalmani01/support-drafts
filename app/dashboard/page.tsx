@@ -7,6 +7,7 @@ import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { createClient } from "@/lib/supabase/client";
 
+
 type Doc = { id: string; title: string; content: string; created_at: string };
 
 const MAX_FILE_BYTES = 500_000; // файл не больше 500 КБ
@@ -24,6 +25,7 @@ export default function DashboardPage() {
   const [importing, setImporting] = useState(false);
   const [message, setMessage] = useState(""); // ошибки (красным)
   const [info, setInfo] = useState(""); // подсказки (серым)
+  const [saving, setSaving] = useState(false);
 
   async function loadDocs() {
     const { data, error } = await supabase
@@ -119,6 +121,8 @@ export default function DashboardPage() {
     setImporting(false);
   }
 
+    // Сохранение документа: отправляем на сервер, он сам нарежет текст
+  // на куски и проиндексирует его для поиска.
   async function handleAdd() {
     if (!title.trim() || !content.trim()) {
       setMessage("Заполни название и текст документа.");
@@ -130,12 +134,28 @@ export default function DashboardPage() {
     }
     setMessage("");
     setInfo("");
+    setSaving(true);
 
-    const { error } = await supabase.from("documents").insert({ title, content });
-    if (error) {
-      setMessage(`Ошибка сохранения: ${error.message}`);
+    try {
+      const res = await fetch("/api/documents", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ title, content }),
+      });
+      const data = await res.json();
+
+      if (!res.ok) {
+        setMessage(data.error ?? "Не удалось сохранить документ");
+        setSaving(false);
+        return;
+      }
+    } catch {
+      setMessage("Нет связи с сервером");
+      setSaving(false);
       return;
     }
+
+    setSaving(false);
     setTitle("");
     setContent("");
     setUrl("");
@@ -230,9 +250,10 @@ export default function DashboardPage() {
         />
         <button
           onClick={handleAdd}
-          className="rounded-lg bg-white px-6 py-3 font-medium text-black hover:bg-gray-200"
+          disabled={saving}
+          className="rounded-lg bg-white px-6 py-3 font-medium text-black hover:bg-gray-200 disabled:opacity-50"
         >
-          Сохранить
+          {saving ? "Индексирую..." : "Сохранить"}
         </button>
 
         {info && <p className="text-sm text-gray-300">{info}</p>}

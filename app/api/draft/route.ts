@@ -1,9 +1,11 @@
-// API-маршрут: принимает вопрос клиента, возвращает черновик ответа
-// и сохраняет его в таблицу drafts, чтобы потом можно было поставить оценку.
-// Выполняется на сервере, поэтому ключ ИИ в браузер не попадает.
+// API-маршрут: принимает вопрос клиента, находит самые подходящие куски
+// документации по смыслу, возвращает черновик ответа и сохраняет его.
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { generateDraft } from "@/lib/ai";
+import { embedTexts } from "@/lib/embeddings";
+
+type Chunk = { title: string; content: string; similarity: number };
 
 export async function POST(request: Request) {
   // 1. Проверяем, что пользователь вошёл.
@@ -27,27 +29,38 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Питання занадто довге" }, { status: 400 });
   }
 
-  // 3. Берём документы пользователя. Благодаря RLS база отдаст только его.
-  const { data: docs, error } = await supabase
-    .from("documents")
-    .select("title, content")
-    .order("created_at", { ascending: false });
-
-  if (error) {
-    return NextResponse.json({ error: "Не вдалось завантажити документи" }, { status: 500 });
+  // 3. Превращаем вопрос в вектор и просим базу найти 6 ближайших кусков.
+  let chunks: Chunk[];
+  try {
+    const [queryVector] = await embedTexts([question], "RETRIEVAL_QUERY");
+    const { data, error } = await supabase.rpc("match_chunks", {
+      query_embedding: queryVector,
+      match_count: 6,
+    });
+    if (error) throw error;
+    chunks = (data ?? []) as Chunk[];
+  } catch (e) {
+    console.error("Ошибка поиска:", e);
+    return NextResponse.json(
+      { error: "Не вдалось знайти потрібні фрагменти. Спробуй ще раз пізніше." },
+      { status: 502 }
+    );
   }
-  if (!docs || docs.length === 0) {
+
+  if (chunks.length === 0) {
     return NextResponse.json(
       { error: "Спочатку додай документи в особистому кабінеті" },
       { status: 400 }
     );
   }
 
-  // 4. Генерируем ответ. Подробности ошибки пишем в лог сервера,
-  // а пользователю показываем короткое сообщение.
+  // 4. Генерируем ответ только по найденным кускам.
   let answer: string;
   try {
-    answer = await generateDraft(question, docs);
+    answer = await generateDraft(
+      question,
+      chunks.map((c) => ({ title: c.title, content: c.content }))
+    );
   } catch (e) {
     console.error("Ошибка генерации:", e);
     return NextResponse.json(
@@ -56,9 +69,7 @@ export async function POST(request: Request) {
     );
   }
 
-  // 5. Сохраняем черновик. user_id база подставит сама.
-  // Если сохранить не вышло, ответ всё равно отдаём (id будет null),
-  // просто оценить его будет нельзя.
+  // 5. Сохраняем черновик, чтобы его можно было оценить 👍/👎.
   const { data: saved, error: saveError } = await supabase
     .from("drafts")
     .insert({ question, answer })
