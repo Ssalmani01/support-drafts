@@ -11,6 +11,8 @@ export const uk = {
     drafts: "Чернетки",
     signOut: "Вийти",
     language: "Мова",
+    themeLight: "Світла тема",
+    themeDark: "Темна тема",
   },
   auth: {
     title: "Вхід у кабінет",
