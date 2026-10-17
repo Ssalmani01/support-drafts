@@ -41,12 +41,14 @@ export function I18nProvider({ children }: { children: React.ReactNode }) {
     }
   }
 
-  // Пока язык не определён, ничего не показываем: так не мелькнёт чужой язык.
-  if (!locale) return null;
+  // Пока язык не определён, используем украинский как запасной.
+  const current: Locale = locale ?? defaultLocale;
 
   return (
-    <I18nContext.Provider value={{ locale, setLocale, d: dictionaries[locale] }}>
-      {children}
+    <I18nContext.Provider value={{ locale: current, setLocale, d: dictionaries[current] }}>
+      {/* Страницы рисуются всегда (этого требует Next.js), но скрыты,
+          пока в браузере не определился язык: так не мелькнёт чужой язык. */}
+      <div style={{ visibility: locale ? "visible" : "hidden" }}>{children}</div>
     </I18nContext.Provider>
   );
 }

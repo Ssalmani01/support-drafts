@@ -9,6 +9,7 @@ export const uk = {
     overview: "Огляд",
     documents: "Документи",
     drafts: "Чернетки",
+    history: "Історія",
     signOut: "Вийти",
     language: "Мова",
     themeLight: "Світла тема",

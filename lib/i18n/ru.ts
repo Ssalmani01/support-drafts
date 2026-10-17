@@ -10,8 +10,11 @@ export const ru: Dictionary = {
     overview: "Обзор",
     documents: "Документы",
     drafts: "Черновики",
+    history: "История",
     signOut: "Выйти",
     language: "Язык",
+    themeLight: "Светлая тема",
+    themeDark: "Тёмная тема",
   },
   auth: {
     title: "Вход в кабинет",

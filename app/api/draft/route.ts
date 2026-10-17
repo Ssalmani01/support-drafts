@@ -2,7 +2,7 @@
 // документации по смыслу, возвращает черновик ответа и сохраняет его.
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
-import { generateDraft } from "@/lib/ai";
+import { AiError, generateDraft } from "@/lib/ai";
 import { embedTexts } from "@/lib/embeddings";
 
 type Chunk = { title: string; content: string; similarity: number };
@@ -61,11 +61,17 @@ export async function POST(request: Request) {
       question,
       chunks.map((c) => ({ title: c.title, content: c.content }))
     );
-  } catch (e) {
+    } catch (e) {
     console.error("Ошибка генерации:", e);
+    // Если сервис просто перегружен, говорим об этом отдельно: это временная проблема.
+    const busy = e instanceof AiError && e.busy;
     return NextResponse.json(
-      { error: "Не вдалось отримати відповідь від ШІ. Спробуй ще раз пізніше." },
-      { status: 502 }
+      {
+        error: busy
+          ? "ШІ зараз перевантажений. Спробуй ще раз за хвилину."
+          : "Не вдалось отримати відповідь від ШІ. Спробуй ще раз пізніше.",
+      },
+      { status: busy ? 503 : 502 }
     );
   }
 

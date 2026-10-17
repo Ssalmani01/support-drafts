@@ -3,6 +3,20 @@
 
 type Doc = { title: string; content: string };
 
+// Ошибка запроса к ИИ. busy = true означает «временная перегрузка: можно повторить».
+export class AiError extends Error {
+  busy: boolean;
+  constructor(message: string, busy = false) {
+    super(message);
+    this.busy = busy;
+  }
+}
+
+// Коды ответа, при которых имеет смысл попробовать ещё раз.
+const RETRYABLE = new Set([429, 500, 502, 503, 504, 529]);
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
 // Ограничиваем объём документов в запросе, чтобы не упереться в лимиты.
 const MAX_CONTEXT_CHARS = 30000;
 
@@ -32,25 +46,33 @@ function buildContext(docs: Doc[]): string {
   return context;
 }
 
-// Запрос к Google Gemini по обычному HTTP (без отдельной библиотеки).
-async function callGemini(system: string, userText: string): Promise<string> {
+// Один запрос к одной модели Gemini (без повторов).
+async function requestGemini(model: string, system: string, userText: string): Promise<string> {
   const key = process.env.GEMINI_API_KEY;
   if (!key) throw new Error("GEMINI_API_KEY не задан в .env.local");
-  const model = process.env.GEMINI_MODEL ?? "gemini-3.8-flash";
 
-  const res = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "x-goog-api-key": key },
-      body: JSON.stringify({
-        systemInstruction: { parts: [{ text: system }] },
-        contents: [{ role: "user", parts: [{ text: userText }] }],
-      }),
-    }
-  );
+  let res: Response;
+  try {
+    res = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "x-goog-api-key": key },
+        body: JSON.stringify({
+          systemInstruction: { parts: [{ text: system }] },
+          contents: [{ role: "user", parts: [{ text: userText }] }],
+        }),
+        signal: AbortSignal.timeout(25_000), // не ждём ответа дольше 25 секунд
+      }
+    );
+  } catch (e) {
+    // Сеть недоступна или время ожидания вышло: это временная проблема.
+    throw new AiError(`Gemini: ошибка соединения (${String(e)})`, true);
+  }
 
-  if (!res.ok) throw new Error(`Gemini ${res.status}: ${await res.text()}`);
+  if (!res.ok) {
+    throw new AiError(`Gemini ${res.status}: ${await res.text()}`, RETRYABLE.has(res.status));
+  }
 
   const data = await res.json();
   // Ответ приходит частями: склеиваем текст всех частей.
@@ -58,8 +80,34 @@ async function callGemini(system: string, userText: string): Promise<string> {
     ?.map((p: { text?: string }) => p.text ?? "")
     .join("");
 
-  if (!text) throw new Error("Пустой ответ от Gemini");
+  if (!text) throw new AiError("Пустой ответ от Gemini", true);
   return text;
+}
+
+// Gemini с повторами и запасной моделью.
+async function callGemini(system: string, userText: string): Promise<string> {
+  const primary = process.env.GEMINI_MODEL ?? "gemini-3.8-flash";
+  const fallback = process.env.GEMINI_FALLBACK_MODEL; // необязательная запасная модель
+  const models = fallback && fallback !== primary ? [primary, fallback] : [primary];
+
+  let lastError: unknown;
+
+  for (const model of models) {
+    // Две попытки на модель: если не вышло, ждём полторы секунды и повторяем.
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        return await requestGemini(model, system, userText);
+      } catch (e) {
+        lastError = e;
+        // Постоянные ошибки (модель убрана, неверный ключ) повторять бессмысленно:
+        // сразу переходим к запасной модели.
+        if (!(e instanceof AiError && e.busy)) break;
+        if (attempt === 0) await sleep(1500);
+      }
+    }
+  }
+
+  throw lastError;
 }
 
 // Запрос к Claude. Понадобится, когда перейдём на платный вариант.
@@ -85,16 +133,17 @@ async function callClaude(system: string, userText: string): Promise<string> {
     }),
   });
 
-  if (!res.ok) throw new Error(`Claude ${res.status}: ${await res.text()}`);
+  if (!res.ok) {
+    throw new AiError(`Claude ${res.status}: ${await res.text()}`, RETRYABLE.has(res.status));
+  }
 
   const data = await res.json();
   const text = data.content?.[0]?.text;
-  if (!text) throw new Error("Пустой ответ от Claude");
+  if (!text) throw new AiError("Пустой ответ от Claude", true);
   return text;
 }
 
 // Единая точка входа: остальной код не знает, какой сервис работает внутри.
-// Слово export делает функцию доступной для импорта в route.ts.
 export async function generateDraft(question: string, docs: Doc[]): Promise<string> {
   const userText = `Документы:\n\n${buildContext(docs)}\n---\nВопрос клиента:\n${question}`;
 

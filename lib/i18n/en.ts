@@ -10,6 +10,7 @@ export const en: Dictionary = {
     overview: "Overview",
     documents: "Documents",
     drafts: "Drafts",
+    history: "History",
     signOut: "Sign out",
     language: "Language",
     themeLight: "Light theme",
